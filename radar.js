@@ -1412,6 +1412,75 @@ ${msg.from.id}`
   );
 });
 
+bot.onText(/\/stats/, async (msg) => {
+  try {
+
+    if (!isAdmin(msg)) {
+      return bot.sendMessage(
+        msg.chat.id,
+        '⛔ هذا الأمر للمالك فقط'
+      );
+    }
+
+    const { data: users, error } = await supabase
+      .from('users_access')
+      .select('*');
+
+    if (error) throw error;
+
+    const now = Date.now();
+
+    const activeUsers =
+      (users || []).filter(user =>
+        user.expires_at &&
+        new Date(user.expires_at).getTime() > now
+      );
+
+    const expiredUsers =
+      (users || []).filter(user =>
+        !user.expires_at ||
+        new Date(user.expires_at).getTime() <= now
+      );
+
+    const activeRadar =
+      activeRadarSessions.size;
+
+    await bot.sendMessage(
+      msg.chat.id,
+`📊 إحصائيات البوت
+
+━━━━━━━━━━━━━━
+
+👥 إجمالي المستخدمين:
+${users.length}
+
+✅ المشتركين الفعالين:
+${activeUsers.length}
+
+❌ الاشتراكات المنتهية:
+${expiredUsers.length}
+
+📡 جلسات الرادار النشطة:
+${activeRadar}
+
+━━━━━━━━━━━━━━
+
+🕒 وقت الفحص:
+${new Date().toLocaleString('ar-SA')}`
+    );
+
+  } catch (err) {
+
+    console.error(err);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `⚠️ حدث خطأ\n${err.message}`
+    );
+
+  }
+});
+
 console.log(
   '📡 ST Market Radar Bot Started'
 );
