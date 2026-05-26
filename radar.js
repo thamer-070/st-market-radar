@@ -1329,9 +1329,8 @@ bot.on('message', async (msg) => {
 
 bot.onText(/\/broadcast ([\s\S]+)/, async (msg, match) => {
   try {
-    const adminOk =
-  isAdmin(msg.from.id) ||
-  isAdmin(msg.chat.id);
+    
+    const adminOk = isAdmin(msg);
 
 if (!adminOk) {
   await bot.sendMessage(
@@ -1346,7 +1345,6 @@ if (!adminOk) {
     const { data: users, error } = await supabase
       .from('users_access')
       .select('*')
-      .eq('active', true);
 
     if (error) throw error;
 
