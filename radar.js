@@ -1329,10 +1329,17 @@ bot.on('message', async (msg) => {
 
 bot.onText(/\/broadcast ([\s\S]+)/, async (msg, match) => {
   try {
-    if (!isAdmin(msg.chat.id)) {
-      await bot.sendMessage(msg.chat.id, '⛔ هذا الأمر للمالك فقط');
-      return;
-    }
+    const adminOk =
+  isAdmin(msg.from.id) ||
+  isAdmin(msg.chat.id);
+
+if (!adminOk) {
+  await bot.sendMessage(
+    msg.chat.id,
+    '⛔ هذا الأمر للمالك فقط'
+  );
+  return;
+}
 
     const message = match[1];
 
