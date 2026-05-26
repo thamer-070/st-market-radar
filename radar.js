@@ -1415,13 +1415,17 @@ ${msg.from.id}`
 bot.onText(/\/stats/, async (msg) => {
   try {
 
-    if (!isAdmin(msg)) {
-      return bot.sendMessage(
-        msg.chat.id,
-        '⛔ هذا الأمر للمالك فقط'
-      );
-    }
+    const adminOk =
+  ADMIN_IDS.includes(String(msg.from.id)) ||
+  ADMIN_IDS.includes(String(msg.chat.id));
 
+if (!adminOk) {
+  return bot.sendMessage(
+    msg.chat.id,
+    '⛔ هذا الأمر للمالك فقط'
+  );
+}
+ 
     const { data: users, error } = await supabase
       .from('users_access')
       .select('*');
