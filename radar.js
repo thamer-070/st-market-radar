@@ -1403,6 +1403,17 @@ ${failed}`
   }
 });
 
+bot.onText(/\/myid/, async (msg) => {
+  await bot.sendMessage(
+    msg.chat.id,
+`chat.id:
+${msg.chat.id}
+
+from.id:
+${msg.from.id}`
+  );
+});
+
 console.log(
   '📡 ST Market Radar Bot Started'
 );
