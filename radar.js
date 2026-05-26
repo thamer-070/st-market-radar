@@ -17,6 +17,11 @@ const ADMIN_IDS = String(process.env.ADMIN_IDS || '')
   .split(',')
   .map(x => x.trim())
   .filter(Boolean);
+function isAdmin(chatId) {
+  return ADMIN_IDS.includes(
+    String(chatId)
+  );
+}
 
 const RADAR_DURATION_MS = 30 * 60 * 1000;
 const RADAR_INTERVAL_MS = 5 * 60 * 1000;
