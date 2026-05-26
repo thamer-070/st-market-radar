@@ -1322,6 +1322,75 @@ bot.on('message', async (msg) => {
   );
 });
 
+bot.onText(/\/broadcast ([\s\S]+)/, async (msg, match) => {
+  try {
+    if (!isAdmin(msg.chat.id)) {
+      await bot.sendMessage(msg.chat.id, '⛔ هذا الأمر للمالك فقط');
+      return;
+    }
+
+    const message = match[1];
+
+    const { data: users, error } = await supabase
+      .from('users_access')
+      .select('*')
+      .eq('active', true);
+
+    if (error) throw error;
+
+    let sent = 0;
+    let failed = 0;
+
+    const now = Date.now();
+
+    for (const user of users || []) {
+      if (!user.expires_at) continue;
+
+      const isActive =
+        new Date(user.expires_at).getTime() > now;
+
+      if (!isActive) continue;
+
+      try {
+        await bot.sendMessage(
+          user.telegram_id,
+          message
+        );
+
+        sent++;
+
+        await new Promise(resolve =>
+          setTimeout(resolve, 300)
+        );
+      } catch (err) {
+        failed++;
+        console.error(
+          `Broadcast failed ${user.telegram_id}:`,
+          err.message
+        );
+      }
+    }
+
+    await bot.sendMessage(
+      msg.chat.id,
+`✅ تم إرسال الرسالة
+
+📨 وصل:
+${sent}
+
+⚠️ فشل:
+${failed}`
+    );
+  } catch (err) {
+    console.error(err);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `⚠️ حدث خطأ أثناء الإرسال\n${err.message}`
+    );
+  }
+});
+
 console.log(
   '📡 ST Market Radar Bot Started'
 );
