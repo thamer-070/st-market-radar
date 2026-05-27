@@ -1114,6 +1114,9 @@ async function sendRadarMessage(chatId, text, threadId) {
   });
 }
 
+async function startRadarSession(msg, symbol) {
+  const chatId = msg.chat.id;
+  
 const userId = String(msg.from?.id || chatId);
 
 const lastRequest =
