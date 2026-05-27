@@ -22,6 +22,7 @@ const RADAR_DURATION_MS = 30 * 60 * 1000;
 const RADAR_INTERVAL_MS = 5 * 60 * 1000;
 
 const activeRadarSessions = new Map();
+const radarPreviousStates = new Map();
 
 // =====================
 // Admin
@@ -381,6 +382,16 @@ function typeArabic(type) {
       : type;
 }
 
+function radarStateKey(chatId, symbol) {
+  return `${chatId}:${symbol}`;
+}
+
+function directionCode(direction) {
+  if (String(direction).includes('صاعد')) return 'UP';
+  if (String(direction).includes('هابط')) return 'DOWN';
+  return 'FLAT';
+}
+
 // =====================
 // Massive API
 // =====================
@@ -531,36 +542,250 @@ function flowScore(item, stockPrice) {
   return Math.round(score);
 }
 
-function getFlowBias(chain, stockPrice) {
-  let callScore = 0;
-  let putScore = 0;
+function getFlowStats(chain, stockPrice) {
+  const stats = {
+    callScore: 0,
+    putScore: 0,
+    callVolume: 0,
+    putVolume: 0,
+    callUnusual: 0,
+    putUnusual: 0,
+    callGammaPower: 0,
+    putGammaPower: 0
+  };
 
   for (const item of chain) {
     const type = getType(item);
-
-    const score = flowScore(
-      item,
+    const volume = getVolume(item);
+    const oi = getOI(item);
+    const gamma = Number(getGamma(item) || 0);
+    const mid = getMid(item);
+    const dist = distancePercent(
+      getStrike(item),
       stockPrice
     );
 
+    const score = flowScore(item, stockPrice);
+
+    const unusual =
+      volume >= 1000 &&
+      oi > 0 &&
+      volume > oi * 2 &&
+      mid > 0 &&
+      dist !== null &&
+      dist <= 3;
+
+    const gammaNear =
+      gamma > 0 &&
+      dist !== null &&
+      dist <= 3 &&
+      volume > 0;
+
     if (type === 'CALL') {
-      callScore += score;
+      stats.callScore += score;
+      stats.callVolume += volume;
+
+      if (unusual) {
+        stats.callUnusual++;
+      }
+
+      if (gammaNear) {
+        stats.callGammaPower += gamma;
+      }
     }
 
     if (type === 'PUT') {
-      putScore += score;
+      stats.putScore += score;
+      stats.putVolume += volume;
+
+      if (unusual) {
+        stats.putUnusual++;
+      }
+
+      if (gammaNear) {
+        stats.putGammaPower += gamma;
+      }
     }
   }
 
-  if (callScore > putScore * 1.30) {
+  return stats;
+}
+
+function getFlowBias(chain, stockPrice) {
+  const stats = getFlowStats(chain, stockPrice);
+
+  if (stats.callScore > stats.putScore * 1.30) {
     return '🟢 CALL DOMINANT';
   }
 
-  if (putScore > callScore * 1.30) {
+  if (stats.putScore > stats.callScore * 1.30) {
     return '🔴 PUT DOMINANT';
   }
 
   return '🟡 NEUTRAL';
+}
+
+function getFlowComparison(current, previous) {
+  if (!previous) {
+    return `أول تحديث للرادار.
+سيتم عرض المقارنة بعد التحديث القادم.`;
+  }
+
+  const priceDiff =
+    current.price - previous.price;
+
+  const callDiff =
+    current.callScore - previous.callScore;
+
+  const putDiff =
+    current.putScore - previous.putScore;
+
+  let priceText = 'السعر بدون تغير واضح';
+  if (priceDiff > 0) {
+    priceText = `السعر ارتفع ${fmtPrice(priceDiff)}`;
+  } else if (priceDiff < 0) {
+    priceText = `السعر انخفض ${fmtPrice(Math.abs(priceDiff))}`;
+  }
+
+  let callText = 'سيولة الكول مستقرة تقريباً';
+  if (callDiff > 0) {
+    callText = `سيولة الكول زادت +${fmt(callDiff)}`;
+  } else if (callDiff < 0) {
+    callText = `سيولة الكول ضعفت -${fmt(Math.abs(callDiff))}`;
+  }
+
+  let putText = 'سيولة البوت مستقرة تقريباً';
+  if (putDiff > 0) {
+    putText = `سيولة البوت زادت +${fmt(putDiff)}`;
+  } else if (putDiff < 0) {
+    putText = `سيولة البوت ضعفت -${fmt(Math.abs(putDiff))}`;
+  }
+
+  let flipText = 'لا يوجد انقلاب واضح في السيطرة';
+
+  if (
+    previous.flowBias.includes('CALL') &&
+    current.flowBias.includes('PUT')
+  ) {
+    flipText = 'انتباه: السيطرة تحولت من الكول إلى البوت';
+  }
+
+  if (
+    previous.flowBias.includes('PUT') &&
+    current.flowBias.includes('CALL')
+  ) {
+    flipText = 'انتباه: السيطرة تحولت من البوت إلى الكول';
+  }
+
+  return `${priceText}
+${callText}
+${putText}
+${flipText}`;
+}
+function getFollowSummary(direction, flowBias, stats, previous) {
+  const dir = directionCode(direction);
+
+  const callDominant =
+    flowBias.includes('CALL');
+
+  const putDominant =
+    flowBias.includes('PUT');
+
+  const callPressure =
+    stats.callScore > stats.putScore * 1.15;
+
+  const putPressure =
+    stats.putScore > stats.callScore * 1.15;
+
+  const callUnusualOk =
+    stats.callUnusual >= stats.putUnusual;
+
+  const putUnusualOk =
+    stats.putUnusual >= stats.callUnusual;
+
+  const callIncreasing =
+    previous
+      ? stats.callScore > previous.callScore
+      : false;
+
+  const putIncreasing =
+    previous
+      ? stats.putScore > previous.putScore
+      : false;
+
+  if (dir === 'UP') {
+    if (callDominant && callPressure && callUnusualOk) {
+      return `✅ حسب المعطيات الحالية: تابع الكول
+
+السبب:
+الاتجاه صاعد، وتدفق العقود يميل للكول، ولا يوجد تعارض قوي من البوت.
+${callIncreasing ? 'كما أن سيولة الكول زادت مقارنة بالتحديث السابق.' : 'راقب استمرار ثبات الاتجاه مع التحديث القادم.'}
+
+تنبيه:
+هذه متابعة للمعطيات وليست توصية دخول.`;
+    }
+
+    if (putDominant || putPressure) {
+      return `⚠️ حسب المعطيات الحالية: انتظر
+
+السبب:
+الاتجاه صاعد، لكن تدفق العقود يميل للبوت أو يضغط عكس الحركة.
+لا توجد توافقية كافية لمتابعة طرف واحد الآن.
+
+تنبيه:
+هذه متابعة للمعطيات وليست توصية دخول.`;
+    }
+
+    return `⚠️ حسب المعطيات الحالية: انتظر
+
+السبب:
+الاتجاه صاعد لكن تدفق العقود غير حاسم.
+الأفضل انتظار توافق أوضح بين السعر والسيولة.
+
+تنبيه:
+هذه متابعة للمعطيات وليست توصية دخول.`;
+  }
+
+  if (dir === 'DOWN') {
+    if (putDominant && putPressure && putUnusualOk) {
+      return `✅ حسب المعطيات الحالية: تابع البوت
+
+السبب:
+الاتجاه هابط، وتدفق العقود يميل للبوت، ولا يوجد تعارض قوي من الكول.
+${putIncreasing ? 'كما أن سيولة البوت زادت مقارنة بالتحديث السابق.' : 'راقب استمرار ثبات الاتجاه مع التحديث القادم.'}
+
+تنبيه:
+هذه متابعة للمعطيات وليست توصية دخول.`;
+    }
+
+    if (callDominant || callPressure) {
+      return `⚠️ حسب المعطيات الحالية: انتظر
+
+السبب:
+الاتجاه هابط، لكن يوجد نشاط كول عكس الحركة.
+لا يتم تفضيل الكول حتى يظهر انعكاس واضح في السعر.
+
+تنبيه:
+هذه متابعة للمعطيات وليست توصية دخول.`;
+    }
+
+    return `⚠️ حسب المعطيات الحالية: انتظر
+
+السبب:
+الاتجاه هابط لكن تدفق العقود غير حاسم.
+الأفضل انتظار توافق أوضح بين السعر والسيولة.
+
+تنبيه:
+هذه متابعة للمعطيات وليست توصية دخول.`;
+  }
+
+  return `⚠️ حسب المعطيات الحالية: انتظر
+
+السبب:
+الاتجاه عرضي أو غير واضح، لذلك لا يتم تفضيل الكول أو البوت حالياً.
+
+تنبيه:
+هذه متابعة للمعطيات وليست توصية دخول.`;
 }
 
 function getUnusualFlow(chain, stockPrice) {
@@ -636,6 +861,7 @@ function getGammaZones(chain, stockPrice) {
 القوة: ${gammaText(getGamma(item))}`;
   }).join('\n\n');
 }
+
 function getSmartMoneyRead(chain, stockPrice, flowBias, direction) {
   const best = chain
     .filter(item => {
@@ -705,7 +931,6 @@ function getSmartMoneyRead(chain, stockPrice, flowBias, direction) {
 
   return `تمركز ملحوظ على ${typeArabic(type)} ${strike}، لكنه يحتاج متابعة خلال التحديثات القادمة.`;
 }
-
 function getOIZones(chain, stockPrice) {
   const calls = chain
     .filter(item => {
@@ -748,7 +973,7 @@ function getOIZones(chain, stockPrice) {
   return `${callText}\n${putText}`;
 }
 
-async function buildRadarMessage(symbol) {
+async function buildRadarMessage(symbol, chatId) {
   const stock = await getStockSnapshot(symbol);
 
   if (!stock) {
@@ -761,8 +986,42 @@ async function buildRadarMessage(symbol) {
     return `⚠️ لا توجد بيانات عقود متاحة على ${symbol}`;
   }
 
+  const key = radarStateKey(chatId, symbol);
+  const previous = radarPreviousStates.get(key);
+
   const direction = marketDirection(stock.change);
   const flowBias = getFlowBias(chain, stock.price);
+  const flowStats = getFlowStats(chain, stock.price);
+
+  const currentState = {
+    symbol,
+    price: stock.price,
+    change: stock.change,
+    direction,
+    flowBias,
+    callScore: flowStats.callScore,
+    putScore: flowStats.putScore,
+    callVolume: flowStats.callVolume,
+    putVolume: flowStats.putVolume,
+    callUnusual: flowStats.callUnusual,
+    putUnusual: flowStats.putUnusual,
+    updatedAt: Date.now()
+  };
+
+  const comparison = getFlowComparison(
+    currentState,
+    previous
+  );
+
+  const followSummary = getFollowSummary(
+    direction,
+    flowBias,
+    flowStats,
+    previous
+  );
+
+  radarPreviousStates.set(key, currentState);
+
   const unusualFlow = getUnusualFlow(chain, stock.price);
   const gammaZones = getGammaZones(chain, stock.price);
   const smartMoney = getSmartMoneyRead(
@@ -788,6 +1047,10 @@ ${flowBias
   .replace('NEUTRAL', 'متوازن')}
 
 ━━━━━━━━━━━━━━
+📊 مقارنة آخر تحديث
+${comparison}
+
+━━━━━━━━━━━━━━
 🔥 التدفق غير المعتاد
 ${unusualFlow}
 
@@ -804,6 +1067,10 @@ ${smartMoney}
 ${oiZones}
 
 ━━━━━━━━━━━━━━
+📌 خلاصة المتابعة
+${followSummary}
+
+━━━━━━━━━━━━━━
 ⏱ يتم التحديث كل 5 دقائق
 🕒 مدة المتابعة 30 دقيقة`;
 }
@@ -817,6 +1084,12 @@ function stopRadarSession(chatId) {
 
   if (oldSession?.timeoutId) {
     clearTimeout(oldSession.timeoutId);
+  }
+
+  if (oldSession?.symbol) {
+    radarPreviousStates.delete(
+      radarStateKey(chatId, oldSession.symbol)
+    );
   }
 
   activeRadarSessions.delete(chatId);
@@ -847,6 +1120,10 @@ async function startRadarSession(msg, symbol) {
 
   stopRadarSession(chatId);
 
+  radarPreviousStates.delete(
+    radarStateKey(chatId, symbol)
+  );
+
   await bot.sendMessage(
     chatId,
     `🔎 تم بدء رادار ${symbol} لمدة 30 دقيقة.`,
@@ -856,7 +1133,10 @@ async function startRadarSession(msg, symbol) {
   );
 
   try {
-    const firstMessage = await buildRadarMessage(symbol);
+    const firstMessage = await buildRadarMessage(
+      symbol,
+      chatId
+    );
 
     await sendRadarMessage(
       chatId,
@@ -877,7 +1157,10 @@ async function startRadarSession(msg, symbol) {
 
   const intervalId = setInterval(async () => {
     try {
-      const message = await buildRadarMessage(symbol);
+      const message = await buildRadarMessage(
+        symbol,
+        chatId
+      );
 
       await sendRadarMessage(
         chatId,
