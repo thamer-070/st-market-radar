@@ -419,49 +419,7 @@ async function isMarketOpenNow() {
   }
 }
 
-// تم تعديل هذه الدالة فقط حتى لا تعتمد على إغلاق اليوم السابق كسعر ثابت
 async function getStockSnapshot(symbol) {
-  try {
-    const snapshotUrl =
-      `https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${API_KEY}`;
-
-    const snapshotData = await apiGet(snapshotUrl);
-
-    const t = snapshotData?.ticker;
-
-    if (t) {
-      const price =
-        t?.lastTrade?.p ||
-        t?.min?.c ||
-        t?.day?.c ||
-        t?.prevDay?.c;
-
-      const prevClose = t?.prevDay?.c || 0;
-
-      if (price) {
-        const change =
-          prevClose
-            ? ((price - prevClose) / prevClose) * 100
-            : 0;
-
-        return {
-          symbol,
-          price,
-          open: t?.day?.o || t?.prevDay?.o,
-          high: t?.day?.h || t?.prevDay?.h,
-          low: t?.day?.l || t?.prevDay?.l,
-          volume: t?.day?.v || t?.prevDay?.v,
-          change
-        };
-      }
-    }
-  } catch (err) {
-    console.error(
-      'Stock Snapshot Error:',
-      err.message
-    );
-  }
-
   try {
     const lastUrl =
       `https://api.massive.com/v2/last/trade/${symbol}?apiKey=${API_KEY}`;
@@ -498,7 +456,7 @@ async function getStockSnapshot(symbol) {
     };
   } catch (err) {
     console.error(
-      'Last Trade Fallback Error:',
+      'Stock Last Trade Error:',
       err.message
     );
 
