@@ -421,42 +421,46 @@ async function isMarketOpenNow() {
 
 async function getStockSnapshot(symbol) {
   try {
-    const lastUrl =
-      `https://api.massive.com/v2/last/trade/${symbol}?apiKey=${API_KEY}`;
+    const now = new Date();
+    const to = now.toISOString().split('T')[0];
+
+    const fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - 5);
+    const from = fromDate.toISOString().split('T')[0];
+
+    const minUrl =
+      `https://api.massive.com/v2/aggs/ticker/${symbol}/range/1/minute/${from}/${to}?adjusted=true&sort=desc&limit=1&apiKey=${API_KEY}`;
 
     const prevUrl =
       `https://api.massive.com/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${API_KEY}`;
 
-    const lastData = await apiGet(lastUrl);
+    const minData = await apiGet(minUrl);
     const prevData = await apiGet(prevUrl);
 
-    const price =
-      lastData?.results?.p ||
-      lastData?.results?.price;
+    const lastBar = minData?.results?.[0];
+    const prev = prevData?.results?.[0];
 
-    const r = prevData?.results?.[0];
+    if (!lastBar || !prev) return null;
 
-    if (!r) return null;
-
-    const finalPrice = price || r.c;
+    const price = lastBar.c;
 
     const change =
-      r.c
-        ? ((finalPrice - r.c) / r.c) * 100
+      prev.c
+        ? ((price - prev.c) / prev.c) * 100
         : 0;
 
     return {
       symbol,
-      price: finalPrice,
-      open: r.o,
-      high: r.h,
-      low: r.l,
-      volume: r.v,
+      price,
+      open: lastBar.o,
+      high: lastBar.h,
+      low: lastBar.l,
+      volume: lastBar.v,
       change
     };
   } catch (err) {
     console.error(
-      'Stock Last Trade Error:',
+      'Stock Minute Price Error:',
       err.message
     );
 
