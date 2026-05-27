@@ -24,6 +24,9 @@ const RADAR_INTERVAL_MS = 5 * 60 * 1000;
 const activeRadarSessions = new Map();
 const radarPreviousStates = new Map();
 
+const userRequestCooldowns = new Map();
+const REQUEST_COOLDOWN_MS = 15 * 1000;
+
 // =====================
 // Admin
 // =====================
@@ -1111,12 +1114,41 @@ async function sendRadarMessage(chatId, text, threadId) {
   });
 }
 
-async function startRadarSession(msg, symbol) {
-  const chatId = msg.chat.id;
+const userId = String(msg.from?.id || chatId);
 
-  const access = await requireAccess(msg);
+const lastRequest =
+  userRequestCooldowns.get(userId) || 0;
 
-  if (!access) return;
+const now = Date.now();
+
+const remainingMs =
+  REQUEST_COOLDOWN_MS - (now - lastRequest);
+
+if (remainingMs > 0) {
+
+  const remainingSec =
+    Math.ceil(remainingMs / 1000);
+
+  await bot.sendMessage(
+    chatId,
+    `⏳ انتظر ${remainingSec} ثانية قبل طلب سهم جديد.`,
+    {
+      message_thread_id:
+        msg.message_thread_id
+    }
+  );
+
+  return;
+}
+
+userRequestCooldowns.set(
+  userId,
+  now
+);
+
+const access = await requireAccess(msg);
+
+if (!access) return;
 
   stopRadarSession(chatId);
 
