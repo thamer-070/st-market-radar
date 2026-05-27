@@ -454,9 +454,10 @@ async function getStockSnapshot(symbol) {
     const lastBar = minData?.results?.[0];
     const prev = prevData?.results?.[0];
 
-    if (!lastBar || !prev) return null;
+    if (!prev) return null;
 
-    const price = lastBar.c;
+const price =
+  lastBar?.c || prev.c;
 
     const change =
       prev.c
@@ -464,14 +465,14 @@ async function getStockSnapshot(symbol) {
         : 0;
 
     return {
-      symbol,
-      price,
-      open: lastBar.o,
-      high: lastBar.h,
-      low: lastBar.l,
-      volume: lastBar.v,
-      change
-    };
+  symbol,
+  price,
+  open: lastBar?.o || prev.o,
+  high: lastBar?.h || prev.h,
+  low: lastBar?.l || prev.l,
+  volume: lastBar?.v || prev.v,
+  change
+};
   } catch (err) {
     console.error(
       'Stock Minute Price Error:',
