@@ -1,161 +1,35 @@
-const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
-const { createClient } = require('@supabase/supabase-js');
+async function getStockSnapshot(symbol) {
+  const url =
+    `https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${API_KEY}`;
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, {
-  polling: true
-});
+  const data = await apiGet(url);
 
-const API_KEY = process.env.MASSIVE_API_KEY;
+  const t = data?.ticker;
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
+  if (!t) return null;
 
-const ADMIN_IDS = String(process.env.ADMIN_IDS || '')
-  .split(',')
-  .map(x => x.trim())
-  .filter(Boolean);
-function isAdmin(chatId) {
-  return ADMIN_IDS.includes(
-    String(chatId)
-  );
-}
+  const price =
+    t?.lastTrade?.p ||
+    t?.day?.c ||
+    t?.prevDay?.c;
 
-const RADAR_DURATION_MS = 30 * 60 * 1000;
-const RADAR_INTERVAL_MS = 5 * 60 * 1000;
+  const prevClose = t?.prevDay?.c || 0;
 
-const activeRadarSessions = new Map();
-
-// =====================
-// Subscription System
-// =====================
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function addDaysIso(days) {
-  const d = new Date();
-  d.setDate(d.getDate() + Number(days));
-  return d.toISOString();
-}
-
-function formatDate(v) {
-  if (!v) return 'غير متوفر';
-
-  return new Date(v).toLocaleString('ar-SA', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-}
-
-function isAdmin(msg) {
-  const fromId = String(msg.from?.id || '');
-  const chatId = String(msg.chat?.id || '');
-
-  return (
-    ADMIN_IDS.includes(fromId) ||
-    ADMIN_IDS.includes(chatId)
-  );
-}
-
-function generateCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
-  let code = 'ST-';
-
-  for (let i = 0; i < 4; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-
-  code += '-';
-
-  for (let i = 0; i < 4; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-
-  return code;
-}
-
-async function createActivationCode(days = 30) {
-  const code = generateCode();
-  const expiresAt = addDaysIso(days);
-
-  const { error } = await supabase
-    .from('activation_codes')
-    .insert({
-      code,
-      days: Number(days),
-      used: false,
-      expires_at: expiresAt
-    });
-
-  if (error) throw error;
+  const change =
+    prevClose
+      ? ((price - prevClose) / prevClose) * 100
+      : 0;
 
   return {
-    code,
-    days,
-    expiresAt
+    symbol,
+    price,
+    open: t?.day?.o,
+    high: t?.day?.h,
+    low: t?.day?.l,
+    volume: t?.day?.v,
+    change
   };
 }
-
-async function getUserAccess(userId) {
-  const { data, error } = await supabase
-    .from('users_access')
-    .select('*')
-    .eq('telegram_id', String(userId))
-    .single();
-
-  if (error && error.code !== 'PGRST116') {
-    throw error;
-  }
-
-  return data || null;
-}
-
-async function hasActiveAccess(userId) {
-  if (ADMIN_IDS.includes(String(userId))) {
-    return true;
-  }
-
-  const user = await getUserAccess(userId);
-
-  if (!user) return false;
-  if (!user.expires_at) return false;
-
-  return new Date(user.expires_at).getTime() > Date.now();
-}
-
-async function requireAccess(msg) {
-  const userId = msg.from?.id;
-
-  const allowed = await hasActiveAccess(userId);
-
-  if (allowed) return true;
-
-  await bot.sendMessage(
-    msg.chat.id,
-`🔒 هذا البوت مخصص للمشتركين فقط.
-
-لتفعيل اشتراكك أرسل:
-
-/redeem CODE
-
-مثال:
-/redeem ST-ABCD-1234`,
-    {
-      message_thread_id: msg.message_thread_id
-    }
-  );
-
-  return false;
-}
-
 async function redeemCode(msg, code) {
   const userId = String(msg.from.id);
   const username = msg.from.username || null;
@@ -237,6 +111,7 @@ ${formatDate(userExpiresAt)}
 TSLA`
   };
 }
+
 // =====================
 // Helpers
 // =====================
@@ -337,7 +212,6 @@ function getMid(item) {
     0
   );
 }
-
 function distancePercent(strike, price) {
   const s = Number(strike);
   const p = Number(price);
@@ -373,6 +247,14 @@ function marketDirection(change) {
   }
 
   return '🟡 عرضي';
+}
+
+function typeArabic(type) {
+  return type === 'CALL'
+    ? 'كول'
+    : type === 'PUT'
+      ? 'بوت'
+      : type;
 }
 
 // =====================
@@ -413,30 +295,91 @@ async function isMarketOpenNow() {
   }
 }
 
+// تم تعديل هذه الدالة فقط حتى لا تعتمد على إغلاق اليوم السابق كسعر ثابت
 async function getStockSnapshot(symbol) {
-  const url =
-    `https://api.massive.com/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${API_KEY}`;
+  try {
+    const snapshotUrl =
+      `https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${API_KEY}`;
 
-  const data = await apiGet(url);
+    const snapshotData = await apiGet(snapshotUrl);
 
-  const r = data?.results?.[0];
+    const t = snapshotData?.ticker;
 
-  if (!r) return null;
+    if (t) {
+      const price =
+        t?.lastTrade?.p ||
+        t?.min?.c ||
+        t?.day?.c ||
+        t?.prevDay?.c;
 
-  const change =
-    r.o
-      ? ((r.c - r.o) / r.o) * 100
-      : 0;
+      const prevClose = t?.prevDay?.c || 0;
 
-  return {
-    symbol,
-    price: r.c,
-    open: r.o,
-    high: r.h,
-    low: r.l,
-    volume: r.v,
-    change
-  };
+      if (price) {
+        const change =
+          prevClose
+            ? ((price - prevClose) / prevClose) * 100
+            : 0;
+
+        return {
+          symbol,
+          price,
+          open: t?.day?.o || t?.prevDay?.o,
+          high: t?.day?.h || t?.prevDay?.h,
+          low: t?.day?.l || t?.prevDay?.l,
+          volume: t?.day?.v || t?.prevDay?.v,
+          change
+        };
+      }
+    }
+  } catch (err) {
+    console.error(
+      'Stock Snapshot Error:',
+      err.message
+    );
+  }
+
+  try {
+    const lastUrl =
+      `https://api.massive.com/v2/last/trade/${symbol}?apiKey=${API_KEY}`;
+
+    const prevUrl =
+      `https://api.massive.com/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${API_KEY}`;
+
+    const lastData = await apiGet(lastUrl);
+    const prevData = await apiGet(prevUrl);
+
+    const price =
+      lastData?.results?.p ||
+      lastData?.results?.price;
+
+    const r = prevData?.results?.[0];
+
+    if (!r) return null;
+
+    const finalPrice = price || r.c;
+
+    const change =
+      r.c
+        ? ((finalPrice - r.c) / r.c) * 100
+        : 0;
+
+    return {
+      symbol,
+      price: finalPrice,
+      open: r.o,
+      high: r.h,
+      low: r.l,
+      volume: r.v,
+      change
+    };
+  } catch (err) {
+    console.error(
+      'Last Trade Fallback Error:',
+      err.message
+    );
+
+    return null;
+  }
 }
 
 async function getOptionsChain(symbol) {
@@ -534,14 +477,6 @@ function getFlowBias(chain, stockPrice) {
   return '🟡 NEUTRAL';
 }
 
-function typeArabic(type) {
-  return type === 'CALL'
-    ? 'كول'
-    : type === 'PUT'
-      ? 'بوت'
-      : type;
-}
-
 function getUnusualFlow(chain, stockPrice) {
   const items = chain
     .filter(item => {
@@ -615,7 +550,6 @@ function getGammaZones(chain, stockPrice) {
 القوة: ${gammaText(getGamma(item))}`;
   }).join('\n\n');
 }
-
 function getSmartMoneyRead(chain, stockPrice, flowBias, direction) {
   const best = chain
     .filter(item => {
@@ -685,6 +619,7 @@ function getSmartMoneyRead(chain, stockPrice, flowBias, direction) {
 
   return `تمركز ملحوظ على ${typeArabic(type)} ${strike}، لكنه يحتاج متابعة خلال التحديثات القادمة.`;
 }
+
 function getOIZones(chain, stockPrice) {
   const calls = chain
     .filter(item => {
@@ -894,6 +829,10 @@ async function startRadarSession(msg, symbol) {
     expiresAt: Date.now() + RADAR_DURATION_MS
   });
 }
+// =====================
+// Callback
+// =====================
+
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
 
@@ -1130,51 +1069,6 @@ ${remainingMin} دقيقة`,
     }
   );
 });
-// =====================
-// Radar Status
-// =====================
-
-bot.onText(/\/radarstatus/, async (msg) => {
-  const session =
-    activeRadarSessions.get(msg.chat.id);
-
-  if (!session) {
-    await bot.sendMessage(
-      msg.chat.id,
-      'لا توجد جلسة رادار نشطة حالياً.',
-      {
-        message_thread_id:
-          msg.message_thread_id
-      }
-    );
-
-    return;
-  }
-
-  const remainingMs =
-    Math.max(
-      session.expiresAt - Date.now(),
-      0
-    );
-
-  const remainingMin =
-    Math.ceil(remainingMs / 60000);
-
-  await bot.sendMessage(
-    msg.chat.id,
-`📡 جلسة الرادار الحالية
-
-السهم:
-${session.symbol}
-
-الوقت المتبقي:
-${remainingMin} دقيقة`,
-    {
-      message_thread_id:
-        msg.message_thread_id
-    }
-  );
-});
 
 // =====================
 // Admin: Remove User
@@ -1298,7 +1192,10 @@ ${active ? '✅ فعال' : '❌ منتهي'}`,
 bot.onText(/\/myid/, async (msg) => {
   await bot.sendMessage(
     msg.chat.id,
-`🆔 Telegram ID:
+`chat.id:
+${msg.chat.id}
+
+from.id:
 ${msg.from.id}`,
     {
       message_thread_id:
@@ -1308,43 +1205,24 @@ ${msg.from.id}`,
 });
 
 // =====================
-// Symbol Message = Start Radar
+// Broadcast
 // =====================
-
-bot.on('message', async (msg) => {
-  const text = msg.text;
-
-  if (!text) return;
-  if (text.startsWith('/')) return;
-  if (!isStockSymbol(text)) return;
-
-  const symbol =
-    text.trim().toUpperCase();
-
-  await startRadarSession(
-    msg,
-    symbol
-  );
-});
 
 bot.onText(/\/broadcast ([\s\S]+)/, async (msg, match) => {
   try {
-    
-    const adminOk = isAdmin(msg);
-
-if (!adminOk) {
-  await bot.sendMessage(
-    msg.chat.id,
-    '⛔ هذا الأمر للمالك فقط'
-  );
-  return;
-}
+    if (!isAdmin(msg)) {
+      await bot.sendMessage(
+        msg.chat.id,
+        '⛔ هذا الأمر للمالك فقط'
+      );
+      return;
+    }
 
     const message = match[1];
 
     const { data: users, error } = await supabase
       .from('users_access')
-      .select('*')
+      .select('*');
 
     if (error) throw error;
 
@@ -1401,31 +1279,19 @@ ${failed}`
   }
 });
 
-bot.onText(/\/myid/, async (msg) => {
-  await bot.sendMessage(
-    msg.chat.id,
-`chat.id:
-${msg.chat.id}
-
-from.id:
-${msg.from.id}`
-  );
-});
+// =====================
+// Stats
+// =====================
 
 bot.onText(/\/stats/, async (msg) => {
   try {
+    if (!isAdmin(msg)) {
+      return bot.sendMessage(
+        msg.chat.id,
+        '⛔ هذا الأمر للمالك فقط'
+      );
+    }
 
- const adminOk =
-  String(msg.from.id) === '7507363697' ||
-  String(msg.chat.id) === '7507363697';
-
-if (!adminOk) {
-  return bot.sendMessage(
-    msg.chat.id,
-    '⛔ هذا الأمر للمالك فقط'
-  );
-}   
- 
     const { data: users, error } = await supabase
       .from('users_access')
       .select('*');
@@ -1474,15 +1340,33 @@ ${new Date().toLocaleString('ar-SA')}`
     );
 
   } catch (err) {
-
     console.error(err);
 
     await bot.sendMessage(
       msg.chat.id,
       `⚠️ حدث خطأ\n${err.message}`
     );
-
   }
+});
+
+// =====================
+// Symbol Message = Start Radar
+// =====================
+
+bot.on('message', async (msg) => {
+  const text = msg.text;
+
+  if (!text) return;
+  if (text.startsWith('/')) return;
+  if (!isStockSymbol(text)) return;
+
+  const symbol =
+    text.trim().toUpperCase();
+
+  await startRadarSession(
+    msg,
+    symbol
+  );
 });
 
 console.log(
