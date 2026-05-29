@@ -7,6 +7,7 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 });
 
 const API_KEY = process.env.MASSIVE_API_KEY;
+const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -19,23 +20,18 @@ const ADMIN_IDS = String(process.env.ADMIN_IDS || '')
   .filter(Boolean);
 
 const RADAR_DURATION_MS = 30 * 60 * 1000;
-
-// تعديل: تحديث كل 10 دقائق بدل 5 دقائق
 const RADAR_INTERVAL_MS = 10 * 60 * 1000;
 
 const activeRadarSessions = new Map();
 const radarPreviousStates = new Map();
 
 const userRequestCooldowns = new Map();
-
-// تعديل: كولداون طلب سهم جديد 60 ثانية بدل 15
 const REQUEST_COOLDOWN_MS = 60 * 1000;
 
-// تعديل: كاش لتخفيف استهلاك Massive
 const stockCache = new Map();
 const chainCache = new Map();
 
-const STOCK_CACHE_MS = 60 * 1000;
+const STOCK_CACHE_MS = 30 * 1000;
 const CHAIN_CACHE_MS = 3 * 60 * 1000;
 
 // =====================
@@ -405,19 +401,53 @@ function directionCode(direction) {
   return 'FLAT';
 }
 // =====================
-// Massive API
+// Finnhub + Massive API
 // =====================
 
 async function apiGet(url) {
   if (!API_KEY) {
-    throw new Error(
-      'Missing MASSIVE_API_KEY'
-    );
+    throw new Error('Missing MASSIVE_API_KEY');
   }
 
   const res = await axios.get(url);
-
   return res.data;
+}
+
+async function getFinnhubQuote(symbol) {
+  if (!FINNHUB_API_KEY) {
+    throw new Error('Missing FINNHUB_API_KEY');
+  }
+
+  const url =
+    `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_API_KEY}`;
+
+  const res = await axios.get(url);
+  const data = res.data || {};
+
+  const price = Number(data.c || 0);
+  const previousClose = Number(data.pc || 0);
+  const open = Number(data.o || 0);
+  const high = Number(data.h || 0);
+  const low = Number(data.l || 0);
+
+  if (!price || price <= 0) {
+    throw new Error(`Finnhub price not available for ${symbol}`);
+  }
+
+  const change =
+    previousClose > 0
+      ? ((price - previousClose) / previousClose) * 100
+      : 0;
+
+  return {
+    symbol,
+    price,
+    open,
+    high,
+    low,
+    volume: 0,
+    change
+  };
 }
 
 async function isMarketOpenNow() {
@@ -454,54 +484,7 @@ async function getStockSnapshot(symbol) {
   }
 
   try {
-    const now = new Date();
-    const to = now.toISOString().split('T')[0];
-
-    const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - 5);
-    const from = fromDate.toISOString().split('T')[0];
-
-    const minUrl =
-      `https://api.massive.com/v2/aggs/ticker/${symbol}/range/1/minute/${from}/${to}?adjusted=true&sort=desc&limit=1&apiKey=${API_KEY}`;
-
-    const prevUrl =
-      `https://api.massive.com/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${API_KEY}`;
-
-    let minData = null;
-
-    try {
-      minData = await apiGet(minUrl);
-    } catch (err) {
-      console.error(
-        'Minute Price Fallback:',
-        err.response?.status || err.message
-      );
-    }
-
-    const prevData = await apiGet(prevUrl);
-
-    const lastBar = minData?.results?.[0];
-    const prev = prevData?.results?.[0];
-
-    if (!prev) return null;
-
-    const price =
-      lastBar?.c || prev.c;
-
-    const change =
-      prev.c
-        ? ((price - prev.c) / prev.c) * 100
-        : 0;
-
-    const result = {
-      symbol,
-      price,
-      open: lastBar?.o || prev.o,
-      high: lastBar?.h || prev.h,
-      low: lastBar?.l || prev.l,
-      volume: lastBar?.v || prev.v,
-      change
-    };
+    const result = await getFinnhubQuote(symbol);
 
     stockCache.set(cacheKey, {
       time: Date.now(),
@@ -511,7 +494,7 @@ async function getStockSnapshot(symbol) {
     return result;
   } catch (err) {
     console.error(
-      'Stock Price Error:',
+      'Finnhub Stock Price Error:',
       err.response?.status,
       err.response?.data || err.message
     );
@@ -615,7 +598,6 @@ function getFlowStats(chain, stockPrice) {
   for (const item of chain) {
     const type = getType(item);
     const volume = getVolume(item);
-    const oi = getOI(item);
     const gamma = Number(getGamma(item) || 0);
     const mid = getMid(item);
     const dist = distancePercent(
@@ -627,8 +609,8 @@ function getFlowStats(chain, stockPrice) {
 
     const unusual =
       volume >= 1000 &&
-      oi > 0 &&
-      volume > oi * 2 &&
+      getOI(item) > 0 &&
+      volume > getOI(item) * 2 &&
       mid > 0 &&
       dist !== null &&
       dist <= 3;
@@ -643,26 +625,16 @@ function getFlowStats(chain, stockPrice) {
       stats.callScore += score;
       stats.callVolume += volume;
 
-      if (unusual) {
-        stats.callUnusual++;
-      }
-
-      if (gammaNear) {
-        stats.callGammaPower += gamma;
-      }
+      if (unusual) stats.callUnusual++;
+      if (gammaNear) stats.callGammaPower += gamma;
     }
 
     if (type === 'PUT') {
       stats.putScore += score;
       stats.putVolume += volume;
 
-      if (unusual) {
-        stats.putUnusual++;
-      }
-
-      if (gammaNear) {
-        stats.putGammaPower += gamma;
-      }
+      if (unusual) stats.putUnusual++;
+      if (gammaNear) stats.putGammaPower += gamma;
     }
   }
 
@@ -698,6 +670,7 @@ function getFlowComparison(current, previous) {
     current.putScore - previous.putScore;
 
   let priceText = 'السعر بدون تغير واضح';
+
   if (priceDiff > 0) {
     priceText = `السعر ارتفع ${fmtPrice(priceDiff)}`;
   } else if (priceDiff < 0) {
@@ -705,6 +678,7 @@ function getFlowComparison(current, previous) {
   }
 
   let callText = 'سيولة الكول مستقرة تقريباً';
+
   if (callDiff > 0) {
     callText = `سيولة الكول زادت +${fmt(callDiff)}`;
   } else if (callDiff < 0) {
@@ -712,6 +686,7 @@ function getFlowComparison(current, previous) {
   }
 
   let putText = 'سيولة البوت مستقرة تقريباً';
+
   if (putDiff > 0) {
     putText = `سيولة البوت زادت +${fmt(putDiff)}`;
   } else if (putDiff < 0) {
@@ -835,6 +810,7 @@ function getUnusualFlow(chain, stockPrice) {
       const volume = getVolume(item);
       const oi = getOI(item);
       const mid = getMid(item);
+
       const dist = distancePercent(
         getStrike(item),
         stockPrice
@@ -873,6 +849,7 @@ function getGammaZones(chain, stockPrice) {
   const items = chain
     .filter(item => {
       const gamma = Number(getGamma(item) || 0);
+
       const dist = distancePercent(
         getStrike(item),
         stockPrice
@@ -908,6 +885,7 @@ function getSmartMoneyRead(chain, stockPrice, flowBias, direction) {
       const volume = getVolume(item);
       const oi = getOI(item);
       const gamma = Number(getGamma(item) || 0);
+
       const delta = Math.abs(
         Number(getDelta(item) || 0)
       );
@@ -1018,7 +996,12 @@ async function buildRadarMessage(symbol, chatId) {
   const stock = await getStockSnapshot(symbol);
 
   if (!stock) {
-    return `⚠️ لم أستطع جلب بيانات ${symbol}`;
+    return `⚠️ لم أستطع جلب سعر السهم من Finnhub لـ ${symbol}
+
+تأكد من:
+1) إضافة FINNHUB_API_KEY في Railway
+2) أن الرمز صحيح
+3) أن مفتاح Finnhub فعال`;
   }
 
   const chain = await getOptionsChain(symbol);
@@ -1065,6 +1048,7 @@ async function buildRadarMessage(symbol, chatId) {
 
   const unusualFlow = getUnusualFlow(chain, stock.price);
   const gammaZones = getGammaZones(chain, stock.price);
+
   const smartMoney = getSmartMoneyRead(
     chain,
     stock.price,
@@ -1076,9 +1060,10 @@ async function buildRadarMessage(symbol, chatId) {
 
   return `📡 رادار السوق — ${symbol}
 
-💰 السعر الحالي: ${fmtPrice(stock.price)}
+💰 سعر السهم الحالي: ${fmtPrice(stock.price)}
 📊 التغير: ${fmtPercent(stock.change)}
 📈 الاتجاه: ${direction}
+📌 مصدر السعر: Finnhub
 
 ━━━━━━━━━━━━━━
 🧭 اتجاه تدفق العقود
@@ -1804,5 +1789,5 @@ bot.on('message', async (msg) => {
 });
 
 console.log(
-  '📡 ST Market Radar Bot Started'
+  '📡 ST Market Radar Bot Started with Finnhub Stock Price'
 );
