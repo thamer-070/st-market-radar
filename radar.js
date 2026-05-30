@@ -35,6 +35,12 @@ const STOCK_CACHE_MS = 30 * 1000;
 const CHAIN_CACHE_MS = 3 * 60 * 1000;
 
 // =====================
+// Advanced Liquidity State
+// =====================
+
+const advancedLiquidityStates = new Map();
+
+// =====================
 // Auto Scanner Settings
 // =====================
 
@@ -303,6 +309,40 @@ function fmtPercent(n) {
   return `${Number(n).toFixed(2)}%`;
 }
 
+function fmtSigned(n) {
+  if (n === undefined || n === null || isNaN(Number(n))) {
+    return 'غير متوفر';
+  }
+
+  const value = Number(n);
+
+  return `${value > 0 ? '+' : ''}${fmt(value)}`;
+}
+
+function fmtCompact(n) {
+  if (n === undefined || n === null || isNaN(Number(n))) {
+    return 'غير متوفر';
+  }
+
+  const value = Number(n);
+  const abs = Math.abs(value);
+  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+
+  if (abs >= 1_000_000_000) {
+    return `${sign}${(abs / 1_000_000_000).toFixed(2)}B`;
+  }
+
+  if (abs >= 1_000_000) {
+    return `${sign}${(abs / 1_000_000).toFixed(2)}M`;
+  }
+
+  if (abs >= 1_000) {
+    return `${sign}${(abs / 1_000).toFixed(1)}K`;
+  }
+
+  return `${sign}${abs.toFixed(0)}`;
+}
+
 function isStockSymbol(text) {
   return /^[A-Za-z]{1,5}$/.test(
     String(text || '').trim()
@@ -359,6 +399,14 @@ function getAsk(item) {
   );
 }
 
+function getLastTradePrice(item) {
+  return Number(
+    item?.last_trade?.price ||
+    item?.day?.close ||
+    0
+  );
+}
+
 function getMid(item) {
   const bid = getBid(item);
   const ask = getAsk(item);
@@ -376,6 +424,34 @@ function getMid(item) {
   );
 }
 
+function getTradeSide(item) {
+  const tradePrice = getLastTradePrice(item);
+  const bid = getBid(item);
+  const ask = getAsk(item);
+
+  if (!tradePrice || !bid || !ask) {
+    return 'MID';
+  }
+
+  const spread = ask - bid;
+
+  if (spread <= 0) {
+    return 'MID';
+  }
+
+  const askDistance = Math.abs(ask - tradePrice);
+  const bidDistance = Math.abs(tradePrice - bid);
+
+  if (askDistance < bidDistance) {
+    return 'ASK';
+  }
+
+  if (bidDistance < askDistance) {
+    return 'BID';
+  }
+
+  return 'MID';
+}
 function distancePercent(strike, price) {
   const s = Number(strike);
   const p = Number(price);
@@ -430,6 +506,34 @@ function directionCode(direction) {
   if (String(direction).includes('هابط')) return 'DOWN';
   return 'FLAT';
 }
+
+function getReadableSide(side) {
+  if (side === 'CALL') {
+    return {
+      arabic: 'الكول',
+      typeArabic: 'كول',
+      winner: 'المشترون',
+      emoji: '🟢'
+    };
+  }
+
+  if (side === 'PUT') {
+    return {
+      arabic: 'البوت',
+      typeArabic: 'بوت',
+      winner: 'البائعون',
+      emoji: '🔴'
+    };
+  }
+
+  return {
+    arabic: 'غير واضح',
+    typeArabic: 'غير واضح',
+    winner: 'متعادل',
+    emoji: '🟡'
+  };
+}
+
 // =====================
 // Finnhub + Massive API
 // =====================
@@ -763,6 +867,348 @@ ${callText}
 ${putText}
 ${flipText}`;
 }
+function getAdvancedLiquidity(chain, stockPrice, flowStats, previous) {
+  let callDex = 0;
+  let putDex = 0;
+
+  let callGex = 0;
+  let putGex = 0;
+
+  let askVolume = 0;
+  let bidVolume = 0;
+  let midVolume = 0;
+
+  let callAskVolume = 0;
+  let callBidVolume = 0;
+
+  let putAskVolume = 0;
+  let putBidVolume = 0;
+
+  for (const item of chain) {
+    const type = getType(item);
+    const oi = getOI(item);
+    const volume = getVolume(item);
+    const delta = Number(getDelta(item) || 0);
+    const gamma = Number(getGamma(item) || 0);
+    const strike = getStrike(item);
+
+    const dist = distancePercent(
+      strike,
+      stockPrice
+    );
+
+    if (
+      !['CALL', 'PUT'].includes(type) ||
+      oi <= 0 ||
+      volume <= 0 ||
+      dist === null ||
+      dist > 5
+    ) {
+      continue;
+    }
+
+    const dex =
+      delta * oi * 100 * stockPrice;
+
+    const gex =
+      gamma * oi * 100 * stockPrice;
+
+    if (type === 'CALL') {
+      callDex += dex;
+      callGex += gex;
+    }
+
+    if (type === 'PUT') {
+      putDex += dex;
+      putGex += gex;
+    }
+
+    const tradeSide = getTradeSide(item);
+
+    if (tradeSide === 'ASK') {
+      askVolume += volume;
+
+      if (type === 'CALL') {
+        callAskVolume += volume;
+      }
+
+      if (type === 'PUT') {
+        putAskVolume += volume;
+      }
+    } else if (tradeSide === 'BID') {
+      bidVolume += volume;
+
+      if (type === 'CALL') {
+        callBidVolume += volume;
+      }
+
+      if (type === 'PUT') {
+        putBidVolume += volume;
+      }
+    } else {
+      midVolume += volume;
+    }
+  }
+
+  const netDex =
+    callDex + putDex;
+
+  const netGex =
+    callGex - Math.abs(putGex);
+
+  const totalAggressiveVolume =
+    askVolume + bidVolume;
+
+  const askPct =
+    totalAggressiveVolume > 0
+      ? Math.round((askVolume / totalAggressiveVolume) * 100)
+      : 0;
+
+  const bidPct =
+    totalAggressiveVolume > 0
+      ? Math.round((bidVolume / totalAggressiveVolume) * 100)
+      : 0;
+
+  const callPower =
+    flowStats.callScore || 0;
+
+  const putPower =
+    flowStats.putScore || 0;
+
+  let buyerScore = 0;
+  let sellerScore = 0;
+
+  if (netDex > 0) buyerScore += 2;
+  if (netDex < 0) sellerScore += 2;
+
+  if (netGex > 0) buyerScore += 2;
+  if (netGex < 0) sellerScore += 2;
+
+  if (askPct >= 60) buyerScore += 3;
+  if (bidPct >= 60) sellerScore += 3;
+
+  if (callPower > putPower * 1.15) buyerScore += 3;
+  if (putPower > callPower * 1.15) sellerScore += 3;
+
+  const callAskBias =
+    callAskVolume > callBidVolume;
+
+  const putBidBias =
+    putBidVolume > putAskVolume;
+
+  if (callAskBias) buyerScore += 1;
+  if (putBidBias) sellerScore += 1;
+
+  const rawStrength =
+    Math.max(buyerScore, sellerScore);
+
+  const strength =
+    Math.min(10, Number(rawStrength.toFixed(1)));
+
+  let winner = 'متعادل';
+  let winnerSide = 'NEUTRAL';
+
+  if (buyerScore > sellerScore) {
+    winner = 'المشترون';
+    winnerSide = 'CALL';
+  }
+
+  if (sellerScore > buyerScore) {
+    winner = 'البائعون';
+    winnerSide = 'PUT';
+  }
+
+  const hedgeText =
+    netDex > 0 && previous?.netDex !== undefined && netDex > previous.netDex
+      ? '🟢 التحوط الشرائي يتزايد'
+      : netDex > 0
+        ? '🟢 التحوط الشرائي مسيطر'
+        : netDex < 0 && previous?.netDex !== undefined && netDex < previous.netDex
+          ? '🔴 التحوط البيعي يتزايد'
+          : netDex < 0
+            ? '🔴 التحوط البيعي مسيطر'
+            : '🟡 التحوط متوازن';
+
+  const dominanceText =
+    winner === 'المشترون'
+      ? '🟢 المشترون يسيطرون على الـ Ask'
+      : winner === 'البائعون'
+        ? '🔴 البائعون يضغطون على الـ Bid'
+        : '🟡 لا يوجد طرف مسيطر بوضوح';
+
+  const advancedText = `━━━━━━━━━━━━━━
+🧠 قراءة السيولة المتقدمة
+
+📊 Gamma Exposure: ${fmtCompact(netGex)}
+📊 Delta Exposure: ${fmtCompact(netDex)}
+
+${hedgeText}
+
+🟢 Ask Flow: ${askPct}%
+🔴 Bid Flow: ${bidPct}%
+
+${dominanceText}
+
+🏆 الطرف المسيطر: ${winner}
+📊 قوة السيطرة: ${strength.toFixed(1)} / 10`;
+
+  return {
+    text: advancedText,
+    netDex,
+    netGex,
+    askPct,
+    bidPct,
+    winner,
+    winnerSide,
+    strength
+  };
+}
+
+function getEnhancedFollowSummary(
+  direction,
+  flowBias,
+  stats,
+  previous,
+  advancedLiquidity,
+  suggestedExpiration
+) {
+  const baseSummary =
+    getFollowSummary(
+      direction,
+      flowBias,
+      stats,
+      previous
+    );
+
+  const dir = directionCode(direction);
+
+  const callDominant =
+    flowBias.includes('CALL');
+
+  const putDominant =
+    flowBias.includes('PUT');
+
+  const deltaBullish =
+    advancedLiquidity.netDex > 0;
+
+  const deltaBearish =
+    advancedLiquidity.netDex < 0;
+
+  const gammaBullish =
+    advancedLiquidity.netGex > 0;
+
+  const gammaBearish =
+    advancedLiquidity.netGex < 0;
+
+  const askDominant =
+    advancedLiquidity.askPct >= 60;
+
+  const bidDominant =
+    advancedLiquidity.bidPct >= 60;
+
+  const buyersControl =
+    advancedLiquidity.winner === 'المشترون';
+
+  const sellersControl =
+    advancedLiquidity.winner === 'البائعون';
+
+  const expiryText =
+    suggestedExpiration
+      ? `📅 الانتهاء المقترح:
+${suggestedExpiration}`
+      : `📅 الانتهاء المقترح:
+غير متوفر`;
+
+  if (
+    dir === 'UP' &&
+    (callDominant || stats.callScore > stats.putScore * 1.15) &&
+    buyersControl &&
+    deltaBullish &&
+    askDominant
+  ) {
+    return `✅ حسب المعطيات الحالية: تابع الكول
+
+الأسباب:
+
+• الاتجاه صاعد
+• Delta Exposure موجب
+${gammaBullish ? '• Gamma Exposure موجب' : '• Gamma Exposure غير داعم بقوة'}
+• المشترون يسيطرون على الـ Ask
+• تدفق الكول أقوى من البوت
+
+${expiryText}
+
+تنبيه:
+
+هذه متابعة للمعطيات وليست توصية دخول.`;
+  }
+
+  if (
+    dir === 'DOWN' &&
+    (putDominant || stats.putScore > stats.callScore * 1.15) &&
+    sellersControl &&
+    deltaBearish &&
+    bidDominant
+  ) {
+    return `✅ حسب المعطيات الحالية: تابع البوت
+
+الأسباب:
+
+• الاتجاه هابط
+• Delta Exposure سلبي
+${gammaBearish ? '• Gamma Exposure سلبي' : '• Gamma Exposure غير داعم بقوة'}
+• البائعون يضغطون على الـ Bid
+• تدفق البوت أقوى من الكول
+
+${expiryText}
+
+تنبيه:
+
+هذه متابعة للمعطيات وليست توصية دخول.`;
+  }
+
+  if (
+    dir === 'UP' &&
+    (callDominant || buyersControl || askDominant)
+  ) {
+    return `⚠️ حسب المعطيات الحالية: مراقبة كول فقط
+
+الأسباب:
+
+• الاتجاه صاعد
+${deltaBullish ? '• Delta Exposure موجب' : '• Delta Exposure غير واضح'}
+${askDominant ? '• المشترون يسيطرون على الـ Ask' : '• سيولة الشراء لم تصل لتأكيد كامل'}
+${callDominant ? '• تدفق الكول أقوى من البوت' : '• تدفق الكول يحتاج تأكيد إضافي'}
+
+${expiryText}
+
+تنبيه:
+
+هذه متابعة للمعطيات وليست توصية دخول.`;
+  }
+
+  if (
+    dir === 'DOWN' &&
+    (putDominant || sellersControl || bidDominant)
+  ) {
+    return `⚠️ حسب المعطيات الحالية: مراقبة بوت فقط
+
+الأسباب:
+
+• الاتجاه هابط
+${deltaBearish ? '• Delta Exposure سلبي' : '• Delta Exposure غير واضح'}
+${bidDominant ? '• البائعون يضغطون على الـ Bid' : '• ضغط البيع لم يصل لتأكيد كامل'}
+${putDominant ? '• تدفق البوت أقوى من الكول' : '• تدفق البوت يحتاج تأكيد إضافي'}
+
+${expiryText}
+
+تنبيه:
+
+هذه متابعة للمعطيات وليست توصية دخول.`;
+  }
+
+  return baseSummary;
+}
 function getFollowSummary(direction, flowBias, stats, previous) {
   const dir = directionCode(direction);
 
@@ -1088,6 +1534,7 @@ function getConcentrationType(percent, expiryCount, expiration) {
     note: '⚠️ التمركز غير كافٍ للتصنيف'
   };
 }
+
 function buildOIExpiryBlock(type, group) {
   if (!group) {
     return `${typeArabic(type)} غير متوفر`;
@@ -1179,7 +1626,6 @@ ${note}
 ${flowAlignment}
 ${activityText}`;
 }
-
 function getOIZones(chain, stockPrice) {
   const groups = {
     CALL: new Map(),
@@ -1348,6 +1794,26 @@ function getSuggestedExpiration(chain, stockPrice, side) {
   return best ? best[0] : null;
 }
 
+function getSuggestedSideFromSummary(summary) {
+  if (String(summary || '').includes('تابع الكول')) {
+    return 'CALL';
+  }
+
+  if (String(summary || '').includes('تابع البوت')) {
+    return 'PUT';
+  }
+
+  if (String(summary || '').includes('مراقبة كول')) {
+    return 'CALL';
+  }
+
+  if (String(summary || '').includes('مراقبة بوت')) {
+    return 'PUT';
+  }
+
+  return null;
+}
+
 async function buildRadarMessage(symbol, chatId) {
   const stock = await getStockSnapshot(symbol);
 
@@ -1369,9 +1835,34 @@ async function buildRadarMessage(symbol, chatId) {
   const key = radarStateKey(chatId, symbol);
   const previous = radarPreviousStates.get(key);
 
+  const liquidityKey = `${chatId}:${symbol}:ADV`;
+  const previousAdvanced =
+    advancedLiquidityStates.get(liquidityKey);
+
   const direction = marketDirection(stock.change);
   const flowBias = getFlowBias(chain, stock.price);
   const flowStats = getFlowStats(chain, stock.price);
+
+  const advancedLiquidity =
+    getAdvancedLiquidity(
+      chain,
+      stock.price,
+      flowStats,
+      previousAdvanced
+    );
+
+  advancedLiquidityStates.set(
+    liquidityKey,
+    {
+      netDex: advancedLiquidity.netDex,
+      netGex: advancedLiquidity.netGex,
+      askPct: advancedLiquidity.askPct,
+      bidPct: advancedLiquidity.bidPct,
+      winner: advancedLiquidity.winner,
+      winnerSide: advancedLiquidity.winnerSide,
+      strength: advancedLiquidity.strength
+    }
+  );
 
   const currentState = {
     symbol,
@@ -1393,12 +1884,34 @@ async function buildRadarMessage(symbol, chatId) {
     previous
   );
 
-  const followSummary = getFollowSummary(
-    direction,
-    flowBias,
-    flowStats,
-    previous
-  );
+  const baseFollowSummary =
+    getFollowSummary(
+      direction,
+      flowBias,
+      flowStats,
+      previous
+    );
+
+  const suggestedSide =
+    getSuggestedSideFromSummary(baseFollowSummary) ||
+    advancedLiquidity.winnerSide;
+
+  const suggestedExpiration =
+    getSuggestedExpiration(
+      chain,
+      stock.price,
+      suggestedSide
+    );
+
+  const followSummary =
+    getEnhancedFollowSummary(
+      direction,
+      flowBias,
+      flowStats,
+      previous,
+      advancedLiquidity,
+      suggestedExpiration
+    );
 
   radarPreviousStates.set(key, currentState);
 
@@ -1447,6 +1960,8 @@ ${smartMoney}
 ━━━━━━━━━━━━━━
 📂 مناطق العقود المفتوحة
 ${oiZones}
+
+${advancedLiquidity.text}
 
 ━━━━━━━━━━━━━━
 📌 خلاصة المتابعة
@@ -1523,9 +2038,34 @@ async function buildAutoScanResult(symbol) {
   const key = radarStateKey('AUTO_SCAN', symbol);
   const previous = radarPreviousStates.get(key);
 
+  const liquidityKey = `AUTO_SCAN:${symbol}:ADV`;
+  const previousAdvanced =
+    advancedLiquidityStates.get(liquidityKey);
+
   const direction = marketDirection(stock.change);
   const flowBias = getFlowBias(chain, stock.price);
   const flowStats = getFlowStats(chain, stock.price);
+
+  const advancedLiquidity =
+    getAdvancedLiquidity(
+      chain,
+      stock.price,
+      flowStats,
+      previousAdvanced
+    );
+
+  advancedLiquidityStates.set(
+    liquidityKey,
+    {
+      netDex: advancedLiquidity.netDex,
+      netGex: advancedLiquidity.netGex,
+      askPct: advancedLiquidity.askPct,
+      bidPct: advancedLiquidity.bidPct,
+      winner: advancedLiquidity.winner,
+      winnerSide: advancedLiquidity.winnerSide,
+      strength: advancedLiquidity.strength
+    }
+  );
 
   const currentState = {
     symbol,
@@ -1542,12 +2082,34 @@ async function buildAutoScanResult(symbol) {
     updatedAt: Date.now()
   };
 
-  const followSummary = getFollowSummary(
-    direction,
-    flowBias,
-    flowStats,
-    previous
-  );
+  const baseFollowSummary =
+    getFollowSummary(
+      direction,
+      flowBias,
+      flowStats,
+      previous
+    );
+
+  const suggestedSide =
+    getSuggestedSideFromSummary(baseFollowSummary) ||
+    advancedLiquidity.winnerSide;
+
+  const suggestedExpiration =
+    getSuggestedExpiration(
+      chain,
+      stock.price,
+      suggestedSide
+    );
+
+  const followSummary =
+    getEnhancedFollowSummary(
+      direction,
+      flowBias,
+      flowStats,
+      previous,
+      advancedLiquidity,
+      suggestedExpiration
+    );
 
   radarPreviousStates.set(key, currentState);
 
@@ -1560,13 +2122,6 @@ async function buildAutoScanResult(symbol) {
   if (!canSendAutoAlert(symbol, signal.side)) {
     return null;
   }
-
-  const suggestedExpiration =
-    getSuggestedExpiration(
-      chain,
-      stock.price,
-      signal.side
-    );
 
   const unusualFlow = getUnusualFlow(chain, stock.price);
 
@@ -1604,6 +2159,8 @@ ${unusualFlow}
 ━━━━━━━━━━━━━━
 🧠 قراءة الأموال الذكية
 ${smartMoney}
+
+${advancedLiquidity.text}
 
 ━━━━━━━━━━━━━━
 📌 خلاصة المتابعة
