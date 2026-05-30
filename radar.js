@@ -979,31 +979,66 @@ function getSmartMoneyRead(chain, stockPrice, flowBias, direction) {
 // OI Zones By Expiration + Volume
 // =====================
 
-function getConcentrationType(percent, expiryCount) {
+function getDTE(expiration) {
+  const today = new Date();
+  const exp = new Date(expiration);
+
+  if (isNaN(exp.getTime())) return null;
+
+  today.setHours(0, 0, 0, 0);
+  exp.setHours(0, 0, 0, 0);
+
+  return Math.ceil((exp - today) / (1000 * 60 * 60 * 24));
+}
+
+function getConcentrationType(percent, expiryCount, expiration) {
+  const dte = getDTE(expiration);
+
+  if (dte !== null) {
+    if (dte <= 14) {
+      return {
+        type: 'قصير المدى',
+        note: '📌 التمركز على انتهاء قريب'
+      };
+    }
+
+    if (dte <= 45) {
+      return {
+        type: 'متوسط المدى',
+        note: '📌 التمركز على انتهاء متوسط'
+      };
+    }
+
+    return {
+      type: 'طويل المدى / مؤسسي',
+      note: '🏦 التمركز على انتهاء بعيد'
+    };
+  }
+
   if (percent >= 50) {
     return {
       type: 'قصير المدى',
-      note: '⚠️ أكثر من نصف العقود متمركزة على انتهاء'
+      note: '📌 تمركز قوي على انتهاء محدد'
     };
   }
 
   if (percent >= 35) {
     return {
-      type: 'متوسط المدى',
-      note: '⚠️ يوجد تمركز واضح على انتهاء محدد'
+      type: 'متوسط',
+      note: '📌 يوجد تمركز واضح على انتهاء محدد'
     };
   }
 
   if (expiryCount >= 3) {
     return {
-      type: 'مؤسسي متدرج',
+      type: 'متدرج',
       note: '✅ العقود موزعة على عدة تواريخ'
     };
   }
 
   return {
-    type: 'متدرج',
-    note: '✅ العقود موزعة بدون سيطرة قوية'
+    type: 'غير واضح',
+    note: '⚠️ التمركز غير كافٍ للتصنيف'
   };
 }
 
@@ -1041,8 +1076,12 @@ function buildOIExpiryBlock(type, group) {
       ? Math.round((dominantVOL.volume / totalVOL) * 100)
       : 0;
 
-  const concentration =
-    getConcentrationType(dominantPercent, expirations.length);
+const concentration =
+  getConcentrationType(
+    dominantPercent,
+    expirations.length,
+    dominantOI.expiration
+  );
 
   const expiryLines = expirations.map(x => {
     const pct =
