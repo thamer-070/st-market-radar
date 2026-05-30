@@ -516,7 +516,7 @@ async function getOptionsChain(symbol) {
   }
 
   const url =
-    `https://api.massive.com/v3/snapshot/options/${symbol}?limit=250&apiKey=${API_KEY}`;
+    `https://api.massive.com/v3/snapshot/options/${symbol}?limit=1000&apiKey=${API_KEY}`;
 
   const data = await apiGet(url);
   const result = data.results || [];
