@@ -515,18 +515,36 @@ async function getOptionsChain(symbol) {
     return cached.data;
   }
 
-  const url =
-    `https://api.massive.com/v3/snapshot/options/${symbol}?limit=1000&apiKey=${API_KEY}`;
+  let url =
+    `https://api.massive.com/v3/snapshot/options/${symbol}?limit=250&apiKey=${API_KEY}`;
 
-  const data = await apiGet(url);
-  const result = data.results || [];
+  let allResults = [];
+  let page = 0;
+  const MAX_PAGES = 4;
+
+  while (url && page < MAX_PAGES) {
+    const data = await apiGet(url);
+    const results = data.results || [];
+
+    allResults = allResults.concat(results);
+
+    if (data.next_url) {
+      url = data.next_url.includes('apiKey=')
+        ? data.next_url
+        : `${data.next_url}&apiKey=${API_KEY}`;
+    } else {
+      url = null;
+    }
+
+    page++;
+  }
 
   chainCache.set(cacheKey, {
     time: Date.now(),
-    data: result
+    data: allResults
   });
 
-  return result;
+  return allResults;
 }
 
 // =====================
