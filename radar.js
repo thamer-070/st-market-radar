@@ -1054,17 +1054,20 @@ function buildOIExpiryBlock(type, group) {
 OI: ${fmt(x.oi)} (${pct}%)
 VOL: ${fmt(x.volume)}`;
   }).join('\n\n');
-
-  const note =
-    concentration.type === 'قصير المدى'
-      ? `${concentration.note} ${dominantOI.expiration}`
-      : concentration.note;
-
+  
+const note =
+  dominantPercent >= 50
+    ? `🎯 التمركز الرئيسي على انتهاء ${dominantOI.expiration}
+📍 ${dominantPercent}% من إجمالي العقود المفتوحة`
+    : concentration.note;
+  
   const activityText =
-    totalVOL > 0
-      ? `🔥 ${activityPercent}% من نشاط اليوم على انتهاء ${dominantVOL.expiration}
-${dominantVOL.volume > dominantVOL.oi ? '💰 دخول سيولة جديدة قوية' : '📌 النشاط الحالي أقل من العقود المفتوحة'}`
-      : '🔥 لا يوجد نشاط تداول واضح اليوم';
+  totalVOL > 0
+    ? `🔥 ${activityPercent}% من نشاط اليوم يتركز على انتهاء ${dominantVOL.expiration}
+${dominantVOL.volume > dominantVOL.oi
+      ? '💰 النشاط الحالي أعلى من التمركز التاريخي'
+      : '📌 النشاط الحالي أقل من التمركز التاريخي'}`
+    : '🔥 لا يوجد نشاط تداول واضح اليوم';
 
   return `🔥 ${typeArabic(type)} ${group.strike}
 
