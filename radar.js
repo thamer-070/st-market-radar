@@ -163,6 +163,7 @@ ST-ABCD-1234`,
 
   return false;
 }
+
 async function redeemCode(msg, code) {
   const userId = String(msg.from.id);
   const username = msg.from.username || null;
@@ -400,6 +401,7 @@ function directionCode(direction) {
   if (String(direction).includes('هابط')) return 'DOWN';
   return 'FLAT';
 }
+
 // =====================
 // Finnhub + Massive API
 // =====================
@@ -471,7 +473,6 @@ async function isMarketOpenNow() {
     return false;
   }
 }
-
 async function getStockSnapshot(symbol) {
   const cacheKey = symbol;
   const cached = stockCache.get(cacheKey);
@@ -640,6 +641,7 @@ function getFlowStats(chain, stockPrice) {
 
   return stats;
 }
+
 function getFlowBias(chain, stockPrice) {
   const stats = getFlowStats(chain, stockPrice);
 
@@ -950,46 +952,156 @@ function getSmartMoneyRead(chain, stockPrice, flowBias, direction) {
   return `تمركز ملحوظ على ${typeArabic(type)} ${strike}، لكنه يحتاج متابعة خلال التحديثات القادمة.`;
 }
 
+// =====================
+// OI Zones By Expiration
+// =====================
+
+function getConcentrationType(percent, expiryCount) {
+  if (percent >= 50) {
+    return {
+      type: 'قصير المدى',
+      note: '⚠️ أكثر من نصف العقود متمركزة على انتهاء'
+    };
+  }
+
+  if (percent >= 35) {
+    return {
+      type: 'متوسط المدى',
+      note: '⚠️ يوجد تمركز واضح على انتهاء محدد'
+    };
+  }
+
+  if (expiryCount >= 3) {
+    return {
+      type: 'مؤسسي متدرج',
+      note: '✅ العقود موزعة على عدة تواريخ'
+    };
+  }
+
+  return {
+    type: 'متدرج',
+    note: '✅ العقود موزعة بدون سيطرة قوية'
+  };
+}
+
+function buildOIExpiryBlock(type, group) {
+  if (!group) {
+    return `${typeArabic(type)} غير متوفر`;
+  }
+
+  const totalOI = group.totalOI;
+
+  const expirations = Array.from(group.expirations.values())
+    .filter(x => x.oi > 0)
+    .sort((a, b) => new Date(a.expiration) - new Date(b.expiration));
+
+  if (!expirations.length || totalOI <= 0) {
+    return `${typeArabic(type)} غير متوفر`;
+  }
+
+  const dominant = expirations
+    .slice()
+    .sort((a, b) => b.oi - a.oi)[0];
+
+  const dominantPercent =
+    totalOI > 0
+      ? Math.round((dominant.oi / totalOI) * 100)
+      : 0;
+
+  const concentration =
+    getConcentrationType(dominantPercent, expirations.length);
+
+  const expiryLines = expirations.map(x => {
+    const pct =
+      totalOI > 0
+        ? Math.round((x.oi / totalOI) * 100)
+        : 0;
+
+    return `📅 ${x.expiration}
+OI: ${fmt(x.oi)} (${pct}%)`;
+  }).join('\n\n');
+
+  const note =
+    concentration.type === 'قصير المدى'
+      ? `${concentration.note} ${dominant.expiration}`
+      : concentration.note;
+
+  return `🔥 ${typeArabic(type)} ${group.strike}
+
+${expiryLines}
+
+📊 إجمالي OI: ${fmt(totalOI)}
+
+🎯 الانتهاء المسيطر: ${dominant.expiration}
+📍 نسبة التمركز: ${dominantPercent}%
+
+🧠 نوع التمركز: ${concentration.type}
+${note}`;
+}
+
 function getOIZones(chain, stockPrice) {
-  const calls = chain
-    .filter(item => {
-      const dist = distancePercent(
-        getStrike(item),
-        stockPrice
-      );
+  const groups = {
+    CALL: new Map(),
+    PUT: new Map()
+  };
 
-      return (
-        getType(item) === 'CALL' &&
-        dist !== null &&
-        dist <= 5
-      );
-    })
-    .sort((a, b) => getOI(b) - getOI(a))[0];
+  for (const item of chain) {
+    const type = getType(item);
+    const strike = getStrike(item);
+    const expiration = getExpiration(item);
+    const oi = getOI(item);
 
-  const puts = chain
-    .filter(item => {
-      const dist = distancePercent(
-        getStrike(item),
-        stockPrice
-      );
+    const dist = distancePercent(strike, stockPrice);
 
-      return (
-        getType(item) === 'PUT' &&
-        dist !== null &&
-        dist <= 5
-      );
-    })
-    .sort((a, b) => getOI(b) - getOI(a))[0];
+    if (
+      !['CALL', 'PUT'].includes(type) ||
+      !strike ||
+      !expiration ||
+      expiration === 'غير متوفر' ||
+      oi <= 0 ||
+      dist === null ||
+      dist > 5
+    ) {
+      continue;
+    }
 
-  const callText = calls
-    ? `كول ${getStrike(calls)} — عقود مفتوحة ${fmt(getOI(calls))}`
-    : 'كول غير متوفر';
+    const key = String(strike);
 
-  const putText = puts
-    ? `بوت ${getStrike(puts)} — عقود مفتوحة ${fmt(getOI(puts))}`
-    : 'بوت غير متوفر';
+    if (!groups[type].has(key)) {
+      groups[type].set(key, {
+        type,
+        strike,
+        totalOI: 0,
+        expirations: new Map()
+      });
+    }
 
-  return `${callText}\n${putText}`;
+    const group = groups[type].get(key);
+
+    group.totalOI += oi;
+
+    if (!group.expirations.has(expiration)) {
+      group.expirations.set(expiration, {
+        expiration,
+        oi: 0
+      });
+    }
+
+    const expiryData = group.expirations.get(expiration);
+    expiryData.oi += oi;
+  }
+
+  const bestCall = Array.from(groups.CALL.values())
+    .sort((a, b) => b.totalOI - a.totalOI)[0];
+
+  const bestPut = Array.from(groups.PUT.values())
+    .sort((a, b) => b.totalOI - a.totalOI)[0];
+
+  return `${buildOIExpiryBlock('CALL', bestCall)}
+
+━━━━━━━━━━━━━━
+
+${buildOIExpiryBlock('PUT', bestPut)}`;
 }
 
 async function buildRadarMessage(symbol, chatId) {
