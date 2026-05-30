@@ -736,25 +736,17 @@ ${flipText}`;
 }
 
 function getFollowSummary(direction, flowBias, stats, previous) {
+
   const dir = directionCode(direction);
 
-  const callDominant =
-    flowBias.includes('CALL');
-
-  const putDominant =
-    flowBias.includes('PUT');
+  const callDominant = flowBias.includes('CALL');
+  const putDominant  = flowBias.includes('PUT');
 
   const callPressure =
     stats.callScore > stats.putScore * 1.15;
 
   const putPressure =
     stats.putScore > stats.callScore * 1.15;
-
-  const callUnusualOk =
-    stats.callUnusual >= stats.putUnusual;
-
-  const putUnusualOk =
-    stats.putUnusual >= stats.callUnusual;
 
   const callIncreasing =
     previous
@@ -766,63 +758,115 @@ function getFollowSummary(direction, flowBias, stats, previous) {
       ? stats.putScore > previous.putScore
       : false;
 
-  if (dir === 'UP') {
-    if (callDominant && callPressure && callUnusualOk) {
-      return `✅ حسب المعطيات الحالية: تابع الكول
+  // ====================
+  // CALL CONFIRMED
+  // ====================
+
+  if (
+    dir === 'UP' &&
+    callDominant &&
+    callPressure
+  ) {
+
+    return `✅ حسب المعطيات الحالية: تابع الكول
 
 السبب:
-الاتجاه صاعد، وتدفق العقود يميل للكول، ولا يوجد تعارض قوي من البوت.
-${callIncreasing ? 'كما أن سيولة الكول زادت مقارنة بالتحديث السابق.' : 'راقب استمرار ثبات الاتجاه مع التحديث القادم.'}
+
+• الاتجاه صاعد.
+• تدفق العقود يميل للكول.
+• السيولة الحالية تدعم استمرار الحركة.
+${callIncreasing ? '• نشاط الكول يزداد مقارنة بالتحديث السابق.' : ''}
 
 تنبيه:
+
 هذه متابعة للمعطيات وليست توصية دخول.`;
-    }
-
-    if (putDominant || putPressure) {
-      return `⚠️ حسب المعطيات الحالية: انتظر
-
-السبب:
-الاتجاه صاعد، لكن تدفق العقود يميل للبوت أو يضغط عكس الحركة.
-لا توجد توافقية كافية لمتابعة طرف واحد الآن.
-
-تنبيه:
-هذه متابعة للمعطيات وليست توصية دخول.`;
-    }
   }
 
-  if (dir === 'DOWN') {
-    if (putDominant && putPressure && putUnusualOk) {
-      return `✅ حسب المعطيات الحالية: تابع البوت
+  // ====================
+  // PUT CONFIRMED
+  // ====================
+
+  if (
+    dir === 'DOWN' &&
+    putDominant &&
+    putPressure
+  ) {
+
+    return `✅ حسب المعطيات الحالية: تابع البوت
 
 السبب:
-الاتجاه هابط، وتدفق العقود يميل للبوت، ولا يوجد تعارض قوي من الكول.
-${putIncreasing ? 'كما أن سيولة البوت زادت مقارنة بالتحديث السابق.' : 'راقب استمرار ثبات الاتجاه مع التحديث القادم.'}
+
+• الاتجاه هابط.
+• تدفق العقود يميل للبوت.
+• السيولة الحالية تدعم استمرار الحركة.
+${putIncreasing ? '• نشاط البوت يزداد مقارنة بالتحديث السابق.' : ''}
 
 تنبيه:
+
 هذه متابعة للمعطيات وليست توصية دخول.`;
-    }
-
-    if (callDominant || callPressure) {
-      return `⚠️ حسب المعطيات الحالية: انتظر
-
-السبب:
-الاتجاه هابط، لكن يوجد نشاط كول عكس الحركة.
-لا يتم تفضيل الكول حتى يظهر انعكاس واضح في السعر.
-
-تنبيه:
-هذه متابعة للمعطيات وليست توصية دخول.`;
-    }
   }
 
-  return `⚠️ حسب المعطيات الحالية: انتظر
+  // ====================
+  // WATCH CALL
+  // ====================
+
+  if (
+    dir === 'DOWN' &&
+    (callDominant || callPressure)
+  ) {
+
+    return `⚠️ حسب المعطيات الحالية: مراقبة كول فقط
 
 السبب:
-الاتجاه غير واضح أو تدفق العقود غير حاسم.
-الأفضل انتظار توافق أوضح بين السعر والسيولة.
+
+• الاتجاه ما زال هابطاً.
+• توجد سيولة كول ملحوظة عكس الحركة الحالية.
+• لا يفضل الكول حتى يظهر انعكاس واضح بالسعر.
 
 تنبيه:
+
+هذه متابعة للمعطيات وليست توصية دخول.`;
+  }
+
+  // ====================
+  // WATCH PUT
+  // ====================
+
+  if (
+    dir === 'UP' &&
+    (putDominant || putPressure)
+  ) {
+
+    return `⚠️ حسب المعطيات الحالية: مراقبة بوت فقط
+
+السبب:
+
+• الاتجاه ما زال صاعداً.
+• توجد سيولة بوت ملحوظة عكس الحركة الحالية.
+• لا يفضل البوت حتى يظهر ضعف واضح بالسعر.
+
+تنبيه:
+
+هذه متابعة للمعطيات وليست توصية دخول.`;
+  }
+
+  // ====================
+  // WAIT
+  // ====================
+
+  return `⛔ حسب المعطيات الحالية: انتظر
+
+السبب:
+
+• لا يوجد توافق كافٍ بين الاتجاه والسيولة.
+• تدفق العقود غير حاسم حالياً.
+• الأفضل انتظار إشارة أوضح.
+
+تنبيه:
+
 هذه متابعة للمعطيات وليست توصية دخول.`;
 }
+  
 function getUnusualFlow(chain, stockPrice) {
   const items = chain
     .filter(item => {
