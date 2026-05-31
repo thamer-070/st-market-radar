@@ -2355,6 +2355,14 @@ async function startRadarSession(msg, symbol) {
       firstMessage,
       msg.message_thread_id
     );
+
+    if (process.env.DECISION_GROUP_ID) {
+  await bot.sendMessage(
+    process.env.DECISION_GROUP_ID,
+    firstMessage
+  );
+}
+    
   } catch (err) {
     await bot.sendMessage(
       chatId,
