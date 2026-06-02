@@ -311,6 +311,34 @@ async function saveDecisionMessage(source, symbol, message) {
 }
 
 // =====================
+// Save Image Snapshots
+// =====================
+
+async function saveImageSnapshot({ symbol, source, messageText }) {
+  try {
+    const { error } = await decisionSupabase
+      .from('image_snapshots')
+      .insert({
+        symbol: String(symbol || '').toUpperCase(),
+        source,
+        message_text: messageText,
+        processed: false
+      });
+
+    if (error) {
+      console.error('SAVE IMAGE SNAPSHOT ERROR:', error.message);
+      return false;
+    }
+
+    console.log('IMAGE SNAPSHOT SAVED:', symbol, source);
+    return true;
+  } catch (err) {
+    console.error('SAVE IMAGE SNAPSHOT CATCH:', err.message);
+    return false;
+  }
+}
+
+// =====================
 // Helpers
 // =====================
 
@@ -2397,6 +2425,12 @@ async function startRadarSession(msg, symbol) {
       firstMessage
     );
 
+    await saveImageSnapshot({
+  symbol,
+  source: 'radar',
+  messageText: firstMessage
+});
+
     if (process.env.DECISION_GROUP_ID) {
       await bot.sendMessage(
         process.env.DECISION_GROUP_ID,
@@ -2433,6 +2467,12 @@ async function startRadarSession(msg, symbol) {
         symbol,
         message
       );
+
+      await saveImageSnapshot({
+  symbol,
+  source: 'radar',
+  messageText: message
+});
 
       if (process.env.DECISION_GROUP_ID) {
         await bot.sendMessage(
