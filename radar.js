@@ -24,6 +24,11 @@ const imageSupabase = createClient(
   process.env.IMAGE_SUPABASE_KEY
 );
 
+const hubSupabase = createClient(
+  process.env.HUB_SUPABASE_URL,
+  process.env.HUB_SUPABASE_KEY
+);
+
 const ADMIN_IDS = String(process.env.ADMIN_IDS || '')
   .split(',')
   .map(x => x.trim())
@@ -173,17 +178,33 @@ async function getUserAccess(userId) {
   return data || null;
 }
 
+async function hasHubAccess(userId, service) {
+  if (!process.env.HUB_SUPABASE_URL || !process.env.HUB_SUPABASE_KEY) {
+    return false;
+  }
+
+  const { data, error } = await hubSupabase
+    .from('hub_subscriptions')
+    .select('services, active, expires_at')
+    .eq('user_id', String(userId))
+    .eq('active', true)
+    .gt('expires_at', new Date().toISOString())
+    .maybeSingle();
+
+  if (error) {
+    console.error('HUB ACCESS ERROR:', error.message);
+    return false;
+  }
+
+  return !!data && Array.isArray(data.services) && data.services.includes(service);
+}
+
 async function hasActiveAccess(userId) {
   if (ADMIN_IDS.includes(String(userId))) {
     return true;
   }
 
-  const user = await getUserAccess(userId);
-
-  if (!user) return false;
-  if (!user.expires_at) return false;
-
-  return new Date(user.expires_at).getTime() > Date.now();
+  return await hasHubAccess(userId, 'radar');
 }
 
 async function requireAccess(msg) {
