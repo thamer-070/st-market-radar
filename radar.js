@@ -1,10 +1,19 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
   polling: true
 });
+
+const app = express();
+
+const RADAR_API_SECRET =
+  process.env.RADAR_API_SECRET || 'ST_RADAR_2026_PRIVATE_KEY';
+
+const PORT =
+  process.env.PORT || 3000;
 
 const API_KEY = process.env.MASSIVE_API_KEY;
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
@@ -3073,6 +3082,14 @@ bot.on('message', async (msg) => {
 });
 
 startAutoScanner();
+
+app.get('/health', (req, res) => {
+  res.send('RADAR BOT OK');
+});
+
+app.listen(PORT, () => {
+  console.log(`Radar API running on ${PORT}`);
+});
 
 console.log(
   '📡 ST Market Radar Bot Started with Finnhub Stock Price + Auto Scanner + Decision Messages'
