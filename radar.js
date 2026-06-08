@@ -3083,6 +3083,50 @@ bot.on('message', async (msg) => {
 
 startAutoScanner();
 
+app.get('/api/radar', async (req, res) => {
+  try {
+    const key = String(req.query.key || '');
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+
+    if (!RADAR_API_SECRET || key !== RADAR_API_SECRET) {
+      return res.status(401).json({
+        ok: false,
+        error: 'UNAUTHORIZED'
+      });
+    }
+
+    if (!isStockSymbol(symbol)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'INVALID_SYMBOL'
+      });
+    }
+
+    const reportText = await buildRadarMessage(symbol, 'RADAR_API');
+
+    await saveDecisionMessage('RADAR_API', symbol, reportText);
+
+    await saveImageSnapshot({
+      symbol,
+      source: 'radar_api',
+      messageText: reportText
+    });
+
+    return res.json({
+      ok: true,
+      symbol,
+      text: reportText
+    });
+  } catch (err) {
+    console.error('RADAR API ERROR:', err.response?.data || err.message);
+
+    return res.status(500).json({
+      ok: false,
+      error: 'RADAR_ANALYSIS_FAILED'
+    });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.send('RADAR BOT OK');
 });
