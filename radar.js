@@ -9,6 +9,26 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 
 const app = express();
 
+const RESTART_PASSWORD = process.env.RESTART_PASSWORD || '0126188';
+
+app.use(express.json());
+
+app.get('/', (req, res) => {
+  res.send('Radar Bot is running');
+});
+
+app.post('/restart', (req, res) => {
+  if (req.body?.password !== RESTART_PASSWORD) {
+    return res.status(403).json({ ok: false, error: 'Forbidden' });
+  }
+
+  res.status(200).json({ ok: true, message: 'Restart command received' });
+
+  setTimeout(() => {
+    process.exit(0);
+  }, 5000);
+});
+
 const RADAR_API_SECRET =
   process.env.RADAR_API_SECRET || 'ST_RADAR_2026_PRIVATE_KEY';
 
