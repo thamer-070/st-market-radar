@@ -27,7 +27,7 @@ app.post('/restart', (req, res) => {
   res.status(200).json({ ok: true, message: 'Restart command received' });
 
   setTimeout(() => {
-    process.exit(1);
+    process.exit(0);
   }, 5000);
 });
 
