@@ -1,5 +1,3 @@
-require('dotenv').config();
-
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const express = require('express');
@@ -27,7 +25,7 @@ app.post('/restart', (req, res) => {
   res.status(200).json({ ok: true, message: 'Restart command received' });
 
   setTimeout(() => {
-    process.exit(0);
+    process.exit(1);
   }, 5000);
 });
 
