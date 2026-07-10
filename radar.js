@@ -718,11 +718,14 @@ async function isMarketOpenNow() {
   }
 }
 
-async function getStockSnapshot(symbol) {
+async function getStockSnapshot(symbol, options = {}) {
+  const forceFresh = options.forceFresh === true;
+
   const cacheKey = symbol;
   const cached = stockCache.get(cacheKey);
 
   if (
+    !forceFresh &&
     cached &&
     Date.now() - cached.time < STOCK_CACHE_MS
   ) {
@@ -749,11 +752,14 @@ async function getStockSnapshot(symbol) {
   }
 }
 
-async function getOptionsChain(symbol) {
+async function getOptionsChain(symbol, options = {}) {
+  const forceFresh = options.forceFresh === true;
+
   const cacheKey = symbol;
   const cached = chainCache.get(cacheKey);
 
   if (
+    !forceFresh &&
     cached &&
     Date.now() - cached.time < CHAIN_CACHE_MS
   ) {
@@ -2084,6 +2090,107 @@ ${followSummary}
 }
 
 // =====================
+// Decision Stop Review Analysis
+// =====================
+
+async function analyzeRadarForStopReview(symbol, requestedSide) {
+  const normalizedSide = String(requestedSide || '').trim().toUpperCase();
+
+  const stock = await getStockSnapshot(symbol, { forceFresh: true });
+
+  if (!stock) {
+    throw new Error(`NO_STOCK_DATA_FOR_${symbol}`);
+  }
+
+  const chain = await getOptionsChain(symbol, { forceFresh: true });
+
+  if (!chain.length) {
+    throw new Error(`NO_OPTIONS_DATA_FOR_${symbol}`);
+  }
+
+  const direction = marketDirection(stock.change);
+  const flowBias = getFlowBias(chain, stock.price);
+  const flowStats = getFlowStats(chain, stock.price);
+
+  const advancedLiquidity = getAdvancedLiquidity(
+    chain,
+    stock.price,
+    flowStats,
+    null
+  );
+
+  const baseFollowSummary = getFollowSummary(
+    direction,
+    flowBias,
+    flowStats,
+    null
+  );
+
+  const suggestedSide =
+    getSuggestedSideFromSummary(baseFollowSummary) ||
+    advancedLiquidity.winnerSide;
+
+  const suggestedExpiration = getSuggestedExpiration(
+    chain,
+    stock.price,
+    suggestedSide
+  );
+
+  const followSummary = getEnhancedFollowSummary(
+    direction,
+    flowBias,
+    flowStats,
+    null,
+    advancedLiquidity,
+    suggestedExpiration
+  );
+
+  const detectedSide =
+    getSuggestedSideFromSummary(followSummary) ||
+    (['CALL', 'PUT'].includes(advancedLiquidity.winnerSide)
+      ? advancedLiquidity.winnerSide
+      : 'NEUTRAL');
+
+  const strength = Number(advancedLiquidity.strength || 0);
+  const confirmedFollow = isConfirmedFollowSignal(followSummary);
+  const isWait = String(followSummary).includes('انتظر');
+
+  const supportsTrade =
+    confirmedFollow &&
+    ['CALL', 'PUT'].includes(detectedSide) &&
+    detectedSide === normalizedSide &&
+    strength >= 6 &&
+    !isWait;
+
+  return {
+    source: 'RADAR',
+    symbol,
+    requestedSide: normalizedSide,
+    side: detectedSide,
+    score: strength,
+    supportsTrade,
+    confirmedFollow,
+    stockPrice: Number(stock.price || 0),
+    stockChange: Number(stock.change || 0),
+    direction,
+    flowBias,
+    callScore: Number(flowStats.callScore || 0),
+    putScore: Number(flowStats.putScore || 0),
+    callVolume: Number(flowStats.callVolume || 0),
+    putVolume: Number(flowStats.putVolume || 0),
+    netDex: Number(advancedLiquidity.netDex || 0),
+    netGex: Number(advancedLiquidity.netGex || 0),
+    askPct: Number(advancedLiquidity.askPct || 0),
+    bidPct: Number(advancedLiquidity.bidPct || 0),
+    winner: advancedLiquidity.winner,
+    winnerSide: advancedLiquidity.winnerSide,
+    suggestedExpiration: suggestedExpiration || null,
+    summary: followSummary,
+    analyzedAt: new Date().toISOString()
+  };
+}
+
+// =====================
 // Auto Scanner
 // =====================
 
@@ -3143,6 +3250,64 @@ app.get('/api/radar', async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: 'RADAR_ANALYSIS_FAILED'
+    });
+  }
+});
+
+app.get('/api/radar/stop-review', async (req, res) => {
+  try {
+    const key = String(req.query.key || '');
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    const requestedSide = String(req.query.side || '').trim().toUpperCase();
+
+    if (!RADAR_API_SECRET || key !== RADAR_API_SECRET) {
+      return res.status(401).json({
+        ok: false,
+        error: 'UNAUTHORIZED'
+      });
+    }
+
+    if (!isStockSymbol(symbol)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'INVALID_SYMBOL'
+      });
+    }
+
+    if (!['CALL', 'PUT'].includes(requestedSide)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'INVALID_SIDE'
+      });
+    }
+
+    console.log('RADAR STOP REVIEW REQUEST:', {
+      symbol,
+      requestedSide
+    });
+
+    const result = await analyzeRadarForStopReview(
+      symbol,
+      requestedSide
+    );
+
+    return res.json({
+      ok: true,
+      symbol,
+      purpose: 'STOP_REVIEW',
+      fresh: true,
+      result
+    });
+  } catch (err) {
+    console.error(
+      'RADAR STOP REVIEW ERROR:',
+      err.response?.data || err.message
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: 'RADAR_STOP_REVIEW_FAILED',
+      details: err.message
     });
   }
 });
