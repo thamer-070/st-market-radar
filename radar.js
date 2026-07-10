@@ -2152,15 +2152,47 @@ async function analyzeRadarForStopReview(symbol, requestedSide) {
       : 'NEUTRAL');
 
   const strength = Number(advancedLiquidity.strength || 0);
-  const confirmedFollow = isConfirmedFollowSignal(followSummary);
-  const isWait = String(followSummary).includes('انتظر');
+const summaryText = String(followSummary || '');
 
-  const supportsTrade =
-    confirmedFollow &&
+const confirmedFollow = isConfirmedFollowSignal(summaryText);
+
+const monitoringSameSide =
+  normalizedSide === 'CALL'
+    ? summaryText.includes('مراقبة كول')
+    : summaryText.includes('مراقبة بوت');
+
+const isWait =
+  summaryText.includes('انتظر') ||
+  summaryText.includes('لا يوجد توافق كاف');
+
+const oppositeSignal =
+  normalizedSide === 'CALL'
+    ? (
+        summaryText.includes('تابع البوت') ||
+        summaryText.includes('مراقبة بوت') ||
+        detectedSide === 'PUT'
+      )
+    : (
+        summaryText.includes('تابع الكول') ||
+        summaryText.includes('مراقبة كول') ||
+        detectedSide === 'CALL'
+      );
+
+const sameSide =
+  monitoringSameSide ||
+  (
     ['CALL', 'PUT'].includes(detectedSide) &&
-    detectedSide === normalizedSide &&
-    strength >= 6 &&
-    !isWait;
+    detectedSide === normalizedSide
+  );
+
+const supportsTrade =
+  sameSide &&
+  !isWait &&
+  !oppositeSignal &&
+  (
+    (confirmedFollow && strength >= 5) ||
+    (monitoringSameSide && strength >= 4)
+  );
 
   return {
     source: 'RADAR',
